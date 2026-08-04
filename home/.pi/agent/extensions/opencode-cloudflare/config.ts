@@ -25,6 +25,7 @@ export interface GatewayModelConfig {
 	readonly outputCost?: number;
 	readonly cacheReadCost?: number;
 	readonly cacheWriteCost?: number;
+	readonly interleavedField?: "reasoning_content" | "reasoning_details";
 	readonly thinkingLevelMap?: ThinkingLevelMap;
 	readonly compat?: Model<Api>["compat"];
 	readonly options?: Readonly<Record<string, JsonValue>>;
@@ -312,6 +313,7 @@ function parseModel(input: unknown, path: string): GatewayModelConfig {
 	const modalities = optionalRecord(record.modalities, `${path}.modalities`);
 	const limit = optionalRecord(record.limit, `${path}.limit`);
 	const cost = optionalRecord(record.cost, `${path}.cost`);
+	const interleaved = optionalRecord(record.interleaved, `${path}.interleaved`);
 	const optionsValue = optionalRecord(record.options, `${path}.options`);
 	const options = optionsValue
 		? Object.fromEntries(Object.entries(optionsValue).map(([key, value]) => [key, parseJsonValue(value, `${path}.options.${key}`)]))
@@ -329,6 +331,7 @@ function parseModel(input: unknown, path: string): GatewayModelConfig {
 		outputCost: optionalNonNegativeNumber(cost?.output, `${path}.cost.output`),
 		cacheReadCost: optionalNonNegativeNumber(cost?.cache_read, `${path}.cost.cache_read`),
 		cacheWriteCost: optionalNonNegativeNumber(cost?.cache_write, `${path}.cost.cache_write`),
+		interleavedField: parseOptionalEnum(interleaved?.field, `${path}.interleaved.field`, ["reasoning_content", "reasoning_details"]),
 		thinkingLevelMap: parseThinkingLevelMap(record.thinkingLevelMap, `${path}.thinkingLevelMap`),
 		compat: parseCompatibility(record.compat, `${path}.compat`),
 		options,
@@ -479,6 +482,18 @@ function normalizeHeaders(headers: Readonly<Record<string, string>> | undefined,
 	return resolved;
 }
 
+function mergeModelConfigs(
+	gatewayModels: Readonly<Record<string, GatewayModelConfig>>,
+	localModels: Readonly<Record<string, GatewayModelConfig>>,
+): Readonly<Record<string, GatewayModelConfig>> {
+	const models = { ...gatewayModels };
+	for (const [modelId, localModel] of Object.entries(localModels)) {
+		const overrides = Object.fromEntries(Object.entries(localModel).filter(([, value]) => value !== undefined));
+		models[modelId] = { ...gatewayModels[modelId], ...overrides };
+	}
+	return models;
+}
+
 function resolveRoute(
 	backend: Backend,
 	document: GatewayDocument | undefined,
@@ -500,7 +515,7 @@ function resolveRoute(
 	return {
 		baseUrl: localProvider?.baseUrl ?? gatewayProvider?.baseUrl ?? DEFAULT_ROUTE_URLS[backend],
 		headers: normalizeHeaders({ ...gatewayProvider?.headers, ...localProvider?.headers }, backend),
-		models: { ...gatewayModels, ...localModels },
+		models: mergeModelConfigs(gatewayModels, localModels),
 		whitelist,
 		blacklist: localProvider?.blacklist ?? gatewayProvider?.blacklist,
 		hasGatewayModels: Object.keys(gatewayModels).length > 0,

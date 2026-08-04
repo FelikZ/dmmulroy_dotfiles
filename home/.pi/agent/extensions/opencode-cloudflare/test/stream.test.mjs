@@ -220,32 +220,51 @@ test("xAI delegates to the OpenAI-compatible streamer through the Grok route", a
 	}
 });
 
-test("Workers AI delegates to the OpenAI-compatible streamer", async () => {
+test("Workers AI delegates reasoning effort and parses interleaved reasoning", async () => {
 	const captured = [];
 	const originalFetch = globalThis.fetch;
 	globalThis.fetch = async (input, init) => {
-		captured.push({ url: typeof input === "string" ? input : input.url, headers: new Headers(init?.headers) });
+		captured.push({
+			url: typeof input === "string" ? input : input.url,
+			headers: new Headers(init?.headers),
+			body: JSON.parse(String(init?.body ?? "{}")),
+		});
 		return new Response([
+			'data: {"choices":[{"delta":{"reasoning_content":"reasoning"},"finish_reason":null}]}\n\n',
 			'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":null}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n',
 			'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n',
 			"data: [DONE]\n\n",
 		].join(""), { status: 200, headers: { "content-type": "text/event-stream" } });
 	};
 	try {
+		const compat = {
+			supportsStore: false,
+			supportsDeveloperRole: false,
+			supportsReasoningEffort: true,
+			requiresReasoningContentOnAssistantMessages: true,
+			maxTokensField: "max_tokens",
+		};
 		const stream = createHarness({
 			backend: "workers-ai",
 			api: "openai-completions",
 			baseUrl: "https://gateway.opencode.cloudflare.dev/compat",
 			headers: {},
 			requestModelId: "workers-ai/@cf/example/model",
-			compat: { supportsStore: false, supportsDeveloperRole: false, supportsReasoningEffort: false, maxTokensField: "max_tokens" },
+			compat,
 		});
-		const result = await consume(stream(visibleModel("@cf/example/model"), {
+		const result = await consume(stream(visibleModel("@cf/example/model", {
+			thinkingLevelMap: { high: "high" },
+			compat,
+		}), {
 			messages: [{ role: "user", content: "Reply", timestamp: 1 }],
-		}));
+		}, { reasoning: "high" }));
 		assert.equal(result.error, undefined);
 		assert.equal(captured[0].url, "https://gateway.opencode.cloudflare.dev/compat/chat/completions");
 		assert.equal(captured[0].headers.get("authorization"), `Bearer ${gatewayToken}`);
+		assert.equal(captured[0].body.reasoning_effort, "high");
+		assert.equal(captured[0].body.thinking, undefined);
+		assert.equal(result.done.content[0].type, "thinking");
+		assert.equal(result.done.content[0].thinking, "reasoning");
 	} finally {
 		globalThis.fetch = originalFetch;
 	}

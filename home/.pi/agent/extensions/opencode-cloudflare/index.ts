@@ -239,14 +239,7 @@ export default async function registerOpencodeCloudflare(pi: ExtensionAPI): Prom
 
 	if (process.env.PI_OFFLINE === undefined) {
 		const catalogRefreshController = new AbortController();
-		let pendingCatalogRefresh: Promise<void> | undefined;
-		pi.on("session_start", (_event, ctx) => {
-			pendingCatalogRefresh = refreshCloudflareProviderCatalog(pi, services, catalogRefreshController.signal).catch(() => {
-				if (!catalogRefreshController.signal.aborted) {
-					ctx.ui.notify("Cloudflare model catalog refresh or cache update failed; using available models.", "warning");
-				}
-			});
-		});
+		const pendingCatalogRefresh = refreshCloudflareProviderCatalog(pi, services, catalogRefreshController.signal).catch(() => {});
 		pi.on("input", async () => {
 			await pendingCatalogRefresh;
 		});

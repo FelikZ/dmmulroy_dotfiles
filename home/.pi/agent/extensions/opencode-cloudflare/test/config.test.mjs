@@ -160,6 +160,29 @@ test("local overlays augment built-in models and preserve typed options", () => 
 	assert.equal(openaiRoute?.reasoningContext, "all_turns");
 });
 
+test("custom GPT-5.6 models inherit OpenCode reasoning levels", () => {
+	const document = parseGatewayDocument({
+		config: {
+			provider: {
+				openai: { models: { "gpt-5.6": {} } },
+			},
+		},
+	});
+	assert.equal(document.ok, true);
+	const catalog = buildCatalog(resolveGatewayConfig(document.value));
+	assert.equal(catalog.ok, true);
+	const model = catalog.value.models.find((candidate) => candidate.id === "gpt-5.6");
+	assert.deepEqual(model?.thinkingLevelMap, {
+		off: "none",
+		minimal: null,
+		low: "low",
+		medium: "medium",
+		high: "high",
+		xhigh: "xhigh",
+		max: null,
+	});
+});
+
 test("partial local model overlays preserve gateway limits", () => {
 	const document = parseGatewayDocument({
 		config: {
@@ -229,6 +252,67 @@ test("partial compatibility overrides preserve built-in safety flags", () => {
 	const model = catalog.value.models.find((candidate) => candidate.id === "claude-opus-4-7");
 	assert.equal(model?.compat?.forceAdaptiveThinking, true);
 	assert.equal(model?.compat?.supportsTemperature, false);
+});
+
+test("workers-ai derives DeepSeek V4 reasoning capabilities from OpenCode metadata", () => {
+	const document = parseGatewayDocument({
+		config: {
+			provider: {
+				"cloudflare-workers-ai": {
+					models: {
+						"@cf/deepseek-ai/deepseek-v4-flash-0731": {
+							reasoning: true,
+							interleaved: { field: "reasoning_content" },
+						},
+						"@cf/deepseek-ai/deepseek-v4-pro": {
+							reasoning: true,
+							interleaved: { field: "reasoning_content" },
+						},
+					},
+				},
+			},
+		},
+	});
+	assert.equal(document.ok, true);
+	const catalog = buildCatalog(resolveGatewayConfig(document.value));
+	assert.equal(catalog.ok, true);
+	const flash = catalog.value.models.find((candidate) => candidate.id === "@cf/deepseek-ai/deepseek-v4-flash-0731");
+	assert.equal(flash?.compat?.supportsReasoningEffort, true);
+	assert.equal(flash?.compat?.requiresReasoningContentOnAssistantMessages, true);
+	assert.equal(flash?.compat?.thinkingFormat, undefined);
+	assert.deepEqual(flash?.thinkingLevelMap, {
+		off: null,
+		minimal: null,
+		low: "low",
+		medium: null,
+		high: "high",
+		xhigh: null,
+		max: "max",
+	});
+	const pro = catalog.value.models.find((candidate) => candidate.id === "@cf/deepseek-ai/deepseek-v4-pro");
+	assert.equal(pro?.thinkingLevelMap?.medium, "medium");
+	assert.equal(catalog.value.routes.get(flash.id)?.compat?.supportsReasoningEffort, true);
+});
+
+test("workers-ai compatibility overrides are preserved", () => {
+	const overlay = parseGatewayLocalOverlay({
+		provider: {
+			"cloudflare-workers-ai": {
+				models: {
+					"@cf/deepseek-ai/deepseek-v4-flash-0731": {
+						compat: { thinkingFormat: "deepseek" },
+					},
+				},
+			},
+		},
+	});
+	assert.equal(overlay.ok, true);
+	const catalog = buildCatalog(resolveGatewayConfig(undefined, overlay.value));
+	assert.equal(catalog.ok, true);
+	const model = catalog.value.models.find((candidate) => candidate.id === "@cf/deepseek-ai/deepseek-v4-flash-0731");
+	assert.equal(model?.compat?.thinkingFormat, "deepseek");
+	assert.equal(model?.compat?.supportsReasoningEffort, true);
+	assert.equal(catalog.value.routes.get(model.id)?.compat?.thinkingFormat, "deepseek");
 });
 
 test("rejects malformed known fields at the configuration boundary", () => {

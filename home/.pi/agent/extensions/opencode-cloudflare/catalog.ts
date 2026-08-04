@@ -188,6 +188,57 @@ const WORKERS_COMPAT: NonNullable<Model<Api>["compat"]> = {
 	maxTokensField: "max_tokens",
 };
 
+const GPT_5_6_THINKING_LEVELS = {
+	off: "none",
+	minimal: null,
+	low: "low",
+	medium: "medium",
+	high: "high",
+	xhigh: "xhigh",
+	max: null,
+} as const;
+
+const DEEPSEEK_V4_THINKING_LEVELS = {
+	off: null,
+	minimal: null,
+	low: "low",
+	medium: "medium",
+	high: "high",
+	xhigh: null,
+	max: "max",
+} as const;
+
+const DEEPSEEK_V4_FLASH_0731_THINKING_LEVELS = {
+	...DEEPSEEK_V4_THINKING_LEVELS,
+	medium: null,
+} as const;
+
+function inferOpenAIThinkingLevelMap(modelId: string, config: GatewayModelConfig) {
+	if (config.thinkingLevelMap) return config.thinkingLevelMap;
+	return modelId === "gpt-5.6" ? GPT_5_6_THINKING_LEVELS : undefined;
+}
+
+function isDeepSeekV4(modelId: string): boolean {
+	return /(?:^|\/)deepseek-v4(?:-|$)/.test(modelId);
+}
+
+function inferWorkersThinkingLevelMap(modelId: string, config: GatewayModelConfig) {
+	if (config.thinkingLevelMap) return config.thinkingLevelMap;
+	if (modelId.endsWith("deepseek-v4-flash-0731")) return DEEPSEEK_V4_FLASH_0731_THINKING_LEVELS;
+	return isDeepSeekV4(modelId) ? DEEPSEEK_V4_THINKING_LEVELS : undefined;
+}
+
+function inferWorkersCompat(modelId: string, config: GatewayModelConfig): NonNullable<Model<Api>["compat"]> {
+	return {
+		...WORKERS_COMPAT,
+		...(config.interleavedField === "reasoning_content"
+			? { requiresReasoningContentOnAssistantMessages: true }
+			: {}),
+		...(isDeepSeekV4(modelId) ? { supportsReasoningEffort: true } : {}),
+		...config.compat,
+	};
+}
+
 function normalizeInputModalities(config: GatewayModelConfig): ("text" | "image")[] {
 	const input = config.inputModalities?.filter((value): value is "text" | "image" => value === "text" || value === "image");
 	if (input?.length) return [...input];
@@ -404,14 +455,15 @@ export function buildCatalog(config: GatewayConfig): Result<CatalogData, Catalog
 				if (isBlacklistedModel(fullModelId, backend, route.blacklist, modelConfig)) continue;
 				const model = toProviderModelConfigFromGateway(modelId, modelConfig);
 				model.name = `${fullModelId} (${modelConfig.name ?? modelId})`;
-				model.compat = WORKERS_COMPAT;
+				model.thinkingLevelMap = inferWorkersThinkingLevelMap(modelId, modelConfig);
+				model.compat = inferWorkersCompat(modelId, modelConfig);
 				const added = addModel(models, routes, model, {
 					backend,
 					api: "openai-completions",
 					baseUrl: route.baseUrl,
 					headers: route.headers,
 					requestModelId: modelConfig.requestModelId ?? fullModelId,
-					compat: WORKERS_COMPAT,
+					compat: model.compat,
 				});
 				if (!added.ok) return added;
 				counts[backend] += 1;
@@ -431,6 +483,7 @@ export function buildCatalog(config: GatewayConfig): Result<CatalogData, Catalog
 			const modelId = stripRoutePrefix(fullModelId, backend);
 			if (seen.has(modelId) || isBlacklistedModel(fullModelId, backend, route.blacklist, modelConfig)) continue;
 			const model = toProviderModelConfigFromGateway(modelId, modelConfig);
+			if (backend === "openai") model.thinkingLevelMap = inferOpenAIThinkingLevelMap(modelId, modelConfig);
 			const routeModel: Model<Api> = {
 				...model,
 				api: getBackendApi(backend),

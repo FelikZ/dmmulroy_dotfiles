@@ -61,7 +61,7 @@ function isolateProductionCredentials() {
 	};
 }
 
-test("provider startup registers fallback models before refreshing the live catalog", async () => {
+test("provider startup immediately refreshes the live catalog without blocking registration", async () => {
 	const restoreCredentials = isolateProductionCredentials();
 	const originalFetch = globalThis.fetch;
 	let resolveFetch;
@@ -75,7 +75,7 @@ test("provider startup registers fallback models before refreshing the live cata
 	try {
 		const harness = createExtensionApiHarness();
 		await registerOpencodeCloudflare(harness.api);
-		assert.equal(fetchCount, 0);
+		assert.equal(fetchCount, 1);
 		assert.equal(harness.providerRegistrations.length, 1);
 		const store = createProviderModelsStore();
 		await harness.providerRegistrations[0].config.refreshModels({ store, allowNetwork: false });
@@ -89,15 +89,6 @@ test("provider startup registers fallback models before refreshing the live cata
 			originalRegisterProvider(name, config);
 			if (harness.providerRegistrations.length === 2) resolveLiveRegistration();
 		};
-		const sessionStart = harness.handlers.get("session_start")?.[0];
-		assert.ok(sessionStart);
-		const result = sessionStart(
-			{ type: "session_start", reason: "startup" },
-			{ ui: { notify() {} } },
-		);
-		assert.equal(result, undefined);
-		assert.equal(fetchCount, 1);
-		assert.equal(harness.providerRegistrations.length, 1);
 		const input = harness.handlers.get("input")?.[0];
 		assert.ok(input);
 		let inputSettled = false;
@@ -172,7 +163,7 @@ test("live model refresh persists the discovered catalog", async () => {
 	}
 });
 
-test("cache-only model refresh restores a persisted catalog without network access", async () => {
+test("cache-only model refresh restores a persisted catalog without additional network access", async () => {
 	const restoreCredentials = isolateProductionCredentials();
 	const originalFetch = globalThis.fetch;
 	let fetchCount = 0;
@@ -201,7 +192,7 @@ test("cache-only model refresh restores a persisted catalog without network acce
 		const refreshModels = harness.providerRegistrations[0].config.refreshModels;
 		const models = await refreshModels({ store, allowNetwork: false });
 
-		assert.equal(fetchCount, 0);
+		assert.equal(fetchCount, 1);
 		const model = models.find((candidate) => candidate.id === "@cf/example/persisted-model");
 		assert.equal(model?.contextWindow, 393216);
 		assert.equal(model?.maxTokens, 32000);
@@ -257,14 +248,8 @@ test("session shutdown aborts an in-flight catalog refresh", async () => {
 	try {
 		const harness = createExtensionApiHarness();
 		await registerOpencodeCloudflare(harness.api);
-		const sessionStart = harness.handlers.get("session_start")?.[0];
 		const sessionShutdown = harness.handlers.get("session_shutdown")?.[0];
-		assert.ok(sessionStart);
 		assert.ok(sessionShutdown);
-		sessionStart(
-			{ type: "session_start", reason: "startup" },
-			{ ui: { notify() {} } },
-		);
 		assert.equal(requestSignal.aborted, false);
 		sessionShutdown(
 			{ type: "session_shutdown", reason: "quit" },
